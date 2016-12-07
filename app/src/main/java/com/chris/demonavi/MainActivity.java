@@ -2,9 +2,12 @@ package com.chris.demonavi;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.RadioGroup;
+import android.widget.TextView;
+import android.widget.Toast;
 
 import com.baidu.location.BDLocation;
 import com.baidu.location.BDLocationListener;
@@ -13,97 +16,77 @@ import com.baidu.location.LocationClientOption;
 import com.baidu.mapapi.SDKInitializer;
 import com.baidu.mapapi.map.BaiduMap;
 import com.baidu.mapapi.map.BitmapDescriptor;
-import com.baidu.mapapi.map.BitmapDescriptorFactory;
 import com.baidu.mapapi.map.MapStatus;
 import com.baidu.mapapi.map.MapStatusUpdateFactory;
 import com.baidu.mapapi.map.MapView;
 import com.baidu.mapapi.map.MyLocationConfiguration;
 import com.baidu.mapapi.map.MyLocationData;
 import com.baidu.mapapi.model.LatLng;
+import com.baidu.mapapi.search.core.RouteLine;
+import com.baidu.mapapi.search.core.SearchResult;
+import com.baidu.mapapi.search.route.BikingRouteResult;
+import com.baidu.mapapi.search.route.DrivingRoutePlanOption;
+import com.baidu.mapapi.search.route.DrivingRouteResult;
+import com.baidu.mapapi.search.route.IndoorRouteResult;
+import com.baidu.mapapi.search.route.MassTransitRouteLine;
+import com.baidu.mapapi.search.route.MassTransitRouteResult;
+import com.baidu.mapapi.search.route.OnGetRoutePlanResultListener;
+import com.baidu.mapapi.search.route.PlanNode;
+import com.baidu.mapapi.search.route.RoutePlanSearch;
+import com.baidu.mapapi.search.route.TransitRouteResult;
+import com.baidu.mapapi.search.route.WalkingRouteResult;
+
 
 public class MainActivity extends Activity {
+    //30.2743630000,120.0740200000   西溪中心经纬度
+
+
     // 定位相关
+    LatLng mCurrentLocation = new LatLng(0,0);//LatLng(double latitude, double longitude)
     LocationClient mLocClient;
     public MyLocationListenner myListener = new MyLocationListenner();
     private MyLocationConfiguration.LocationMode mCurrentMode;
     BitmapDescriptor mCurrentMarker;
-    private static final int accuracyCircleFillColor = 0xAAFFFF88;
-    private static final int accuracyCircleStrokeColor = 0xAA00FF00;
-
     MapView mMapView;
     BaiduMap mBaiduMap;
-
-    // UI相关
-    RadioGroup.OnCheckedChangeListener radioButtonListener;
-    Button requestLocButton;
     boolean isFirstLoc = true; // 是否首次定位
+
+    // 浏览路线节点相关
+    Button mBtnPre = null; // 上一个节点
+    Button mBtnNext = null; // 下一个节点
+    int nodeIndex = -1; // 节点索引,供浏览节点时使用
+    RouteLine route = null;
+    MassTransitRouteLine massroute = null;
+    OverlayManager routeOverlay = null;
+    boolean useDefaultIcon = false;
+    private TextView popupText = null; // 泡泡view
+
+
+    // 搜索相关
+    RoutePlanSearch mSearch = null;    // 搜索模块，也可去掉地图模块独立使用
+    WalkingRouteResult nowResultwalk = null;
+    BikingRouteResult nowResultbike = null;
+    TransitRouteResult nowResultransit = null;
+    DrivingRouteResult nowResultdrive  = null;
+    MassTransitRouteResult nowResultmass = null;
+
+    int nowSearchType = -1 ; // 当前进行的检索，供判断浏览节点时结果使用。
+
+    String startNodeStr = "西二旗";
+    String endNodeStr = "龙泽";
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         SDKInitializer.initialize(getApplicationContext());
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_location);
-        requestLocButton = (Button) findViewById(R.id.button1);
-        mCurrentMode = MyLocationConfiguration.LocationMode.NORMAL;
-        requestLocButton.setText("普通");
-        View.OnClickListener btnClickListener = new View.OnClickListener() {
-            public void onClick(View v) {
-                switch (mCurrentMode) {
-                    case NORMAL:
-                        requestLocButton.setText("跟随");
-                        mCurrentMode = MyLocationConfiguration.LocationMode.FOLLOWING;
-                        mBaiduMap
-                                .setMyLocationConfigeration(new MyLocationConfiguration(
-                                        mCurrentMode, true, mCurrentMarker));
-                        break;
-                    case COMPASS:
-                        requestLocButton.setText("普通");
-                        mCurrentMode = MyLocationConfiguration.LocationMode.NORMAL;
-                        mBaiduMap
-                                .setMyLocationConfigeration(new MyLocationConfiguration(
-                                        mCurrentMode, true, mCurrentMarker));
-                        break;
-                    case FOLLOWING:
-                        requestLocButton.setText("罗盘");
-                        mCurrentMode = MyLocationConfiguration.LocationMode.COMPASS;
-                        mBaiduMap
-                                .setMyLocationConfigeration(new MyLocationConfiguration(
-                                        mCurrentMode, true, mCurrentMarker));
-                        break;
-                    default:
-                        break;
-                }
-            }
-        };
-        requestLocButton.setOnClickListener(btnClickListener);
-
-        RadioGroup group = (RadioGroup) this.findViewById(R.id.radioGroup);
-        radioButtonListener = new RadioGroup.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(RadioGroup group, int checkedId) {
-                if (checkedId == R.id.defaulticon) {
-                    // 传入null则，恢复默认图标
-                    mCurrentMarker = null;
-                    mBaiduMap
-                            .setMyLocationConfigeration(new MyLocationConfiguration(
-                                    mCurrentMode, true, null));
-                }
-                if (checkedId == R.id.customicon) {
-                    // 修改为自定义marker
-                    mCurrentMarker = BitmapDescriptorFactory
-                            .fromResource(R.drawable.icon_geo);
-                    mBaiduMap
-                            .setMyLocationConfigeration(new MyLocationConfiguration(
-                                    mCurrentMode, true, mCurrentMarker,
-                                    accuracyCircleFillColor, accuracyCircleStrokeColor));
-                }
-            }
-        };
-        group.setOnCheckedChangeListener(radioButtonListener);
-
         // 地图初始化
         mMapView = (MapView) findViewById(R.id.bmapView);
         mBaiduMap = mMapView.getMap();
+        mCurrentMode = MyLocationConfiguration.LocationMode.NORMAL;
+        mBaiduMap.setMyLocationConfigeration(new MyLocationConfiguration(
+                        mCurrentMode, true, mCurrentMarker));
+
         // 开启定位图层
         mBaiduMap.setMyLocationEnabled(true);
         // 定位初始化
@@ -112,9 +95,14 @@ public class MainActivity extends Activity {
         LocationClientOption option = new LocationClientOption();
         option.setOpenGps(true); // 打开gps
         option.setCoorType("bd09ll"); // 设置坐标类型
-        option.setScanSpan(1000);
+        option.setScanSpan(1000);//1秒定位一次
         mLocClient.setLocOption(option);
         mLocClient.start();
+        //30.2743630000,120.0740200000   西溪中心经纬度
+        LatLng ll = new LatLng(30.2743630000,120.0740200000);
+        MapStatus.Builder builder = new MapStatus.Builder();
+        builder.target(ll).zoom(15.0f);
+        mBaiduMap.animateMapStatus(MapStatusUpdateFactory.newMapStatus(builder.build()));
     }
 
     /**
@@ -131,21 +119,100 @@ public class MainActivity extends Activity {
             MyLocationData locData = new MyLocationData.Builder()
                     .accuracy(location.getRadius())
                     // 此处设置开发者获取到的方向信息，顺时针0-360
-                    .direction(100).latitude(location.getLatitude())
+                    .direction(location.getDirection())//GPS定位时方向角度
+                    .latitude(location.getLatitude())
                     .longitude(location.getLongitude()).build();
             mBaiduMap.setMyLocationData(locData);
             if (isFirstLoc) {
                 isFirstLoc = false;
-                LatLng ll = new LatLng(location.getLatitude(),
-                        location.getLongitude());
-                MapStatus.Builder builder = new MapStatus.Builder();
-                builder.target(ll).zoom(18.0f);
-                mBaiduMap.animateMapStatus(MapStatusUpdateFactory.newMapStatus(builder.build()));
+                search(new LatLng(location.getLatitude(),location.getLongitude()));
             }
+            mCurrentLocation = new LatLng(location.getLatitude(),location.getLongitude());
         }
 
         public void onReceivePoi(BDLocation poiLocation) {
         }
+    }
+
+    private void search(LatLng latLng) {
+        mSearch = RoutePlanSearch.newInstance();
+        DrivingRoutePlanOption drivingOption = new DrivingRoutePlanOption();
+        mSearch.drivingSearch((new DrivingRoutePlanOption())
+                .policy(DrivingRoutePlanOption.DrivingPolicy.ECAR_DIS_FIRST)
+                .from(PlanNode.withLocation(latLng))
+                .to(PlanNode.withLocation(new LatLng(30.2743630000,120.0740200000))));
+        mSearch.setOnGetRoutePlanResultListener(new OnGetRoutePlanResultListener() {
+            @Override
+            public void onGetWalkingRouteResult(WalkingRouteResult walkingRouteResult) {
+
+            }
+
+            @Override
+            public void onGetTransitRouteResult(TransitRouteResult transitRouteResult) {
+
+            }
+
+            @Override
+            public void onGetMassTransitRouteResult(MassTransitRouteResult massTransitRouteResult) {
+
+            }
+
+            @Override
+            public void onGetDrivingRouteResult(DrivingRouteResult result) {
+                if (result == null || result.error != SearchResult.ERRORNO.NO_ERROR) {
+                    Toast.makeText(MainActivity.this, "抱歉，未找到结果", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (result.error == SearchResult.ERRORNO.NO_ERROR) {
+                    if (result.getRouteLines().size() > 1 ) {
+                        nowResultdrive = result;
+
+                        MyTransitDlg myTransitDlg = new MyTransitDlg(RoutePlanDemo.this,
+                                result.getRouteLines(),
+                                RouteLineAdapter.Type.DRIVING_ROUTE);
+                        myTransitDlg.setOnItemInDlgClickLinster(new OnItemInDlgClickListener() {
+                            public void onItemClick(int position) {
+                                route = nowResultdrive.getRouteLines().get(position);
+                                DrivingRouteOverlay overlay = new MyDrivingRouteOverlay(mBaidumap);
+                                mBaidumap.setOnMarkerClickListener(overlay);
+                                routeOverlay = overlay;
+                                overlay.setData(nowResultdrive.getRouteLines().get(position));
+                                overlay.addToMap();
+                                overlay.zoomToSpan();
+                            }
+
+                        });
+                        myTransitDlg.show();
+
+                    } else if ( result.getRouteLines().size() == 1 ) {
+                        route = result.getRouteLines().get(0);
+                        DrivingRouteOverlay overlay = new MyDrivingRouteOverlay(mBaidumap);
+                        routeOverlay = overlay;
+                        mBaidumap.setOnMarkerClickListener(overlay);
+                        overlay.setData(result.getRouteLines().get(0));
+                        overlay.addToMap();
+                        overlay.zoomToSpan();
+                        mBtnPre.setVisibility(View.VISIBLE);
+                        mBtnNext.setVisibility(View.VISIBLE);
+                    } else {
+                        Log.d("route result", "结果数<0" );
+                        return;
+                    }
+
+                }
+            }
+
+            @Override
+            public void onGetIndoorRouteResult(IndoorRouteResult indoorRouteResult) {
+
+            }
+
+            @Override
+            public void onGetBikingRouteResult(BikingRouteResult bikingRouteResult) {
+
+            }
+        });
+        mSearch.drivingSearch(drivingOption);
     }
 
     @Override
